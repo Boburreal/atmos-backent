@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# CORS sozlamalari (Mini App xatosiz bog'lanishi uchun)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -41,15 +40,16 @@ async def process_audio(
 
         filters = []
 
-        # 1. Vocal Remover filtri
+        # 1. Vocal Remover (Artist ovozini o'chirish / Instrumental)
         if vocal_remover.lower() == "true":
-            filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
+            # Center Channel Inversion + Vocal Band Stop
+            filters.append("pan=stereo|c0=c0-c1|c1=c1-c0,equalizer=f=1000:width_type=h:width=2000:g=-15")
 
-        # 2. Speed (Atempo) filtri
+        # 2. Speed (Atempo)
         if speed != 1.0:
             filters.append(f"atempo={speed}")
 
-        # 3. Bass va Equalizer filtri
+        # 3. Bass va Equalizer
         eq_vals = [float(x) for x in eq.split(",")]
         if len(eq_vals) == 9:
             filters.append(
@@ -63,18 +63,18 @@ async def process_audio(
                 f"equalizer=f=16000:width_type=h:width=200:g={eq_vals[7]}"
             )
 
-        # 4. Reverb filtri
+        # 4. Reverb
         if reverb > 0:
             out_g = 0.88 * (reverb / 100)
             filters.append(f"aecho=0.8:{out_g}:60:0.4")
 
-        # 5. 8D Audio filtri
+        # 5. 8D Audio (Aylanish tezligi sekinlashtirildi: hz=0.08)
         if is_8d.lower() == "true":
-            filters.append("apulsator=hz=0.125")
+            filters.append("apulsator=hz=0.08")
 
         filter_complex = ",".join(filters) if filters else "anull"
 
-        # FFmpeg buyrug'i
+        # FFmpeg Buyrug'i
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
         
         has_cover = os.path.exists("cover.jpg")
@@ -83,8 +83,15 @@ async def process_audio(
 
         ffmpeg_cmd.extend(["-af", filter_complex])
 
+        # Asl rasmni o'chirib, o'rniga yangi cover.jpg rasmini majburiy (override) qo'yish
         if has_cover:
-            ffmpeg_cmd.extend(["-map", "0:a", "-map", "1:v", "-c:v", "copy", "-disposition:v:0", "attached_pic"])
+            ffmpeg_cmd.extend([
+                "-map", "0:a", 
+                "-map", "1:v", 
+                "-c:v", "mjpeg", 
+                "-disposition:v:0", "attached_pic",
+                "-id3v2_version", "3"
+            ])
 
         ffmpeg_cmd.extend([
             "-b:a", bitrate,
