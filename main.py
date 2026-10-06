@@ -1,12 +1,13 @@
 import os
-import tempfile
+import subprocess
+import shutil
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydub import AudioSegment
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
+# CORS sozlamalari (Mini App xatosiz bog'lanishi uchun)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,50 +17,90 @@ app.add_middleware(
 )
 
 @app.get("/")
-def home():
-    return {"status": "Atmos Remaker API ishlayapti!"}
+def read_root():
+    return {"status": "ATMOS Backend active"}
 
 @app.post("/process-audio")
 async def process_audio(
     file: UploadFile = File(...),
     speed: float = Form(1.0),
     reverb: float = Form(0.0),
-    bass: float = Form(0.0)
+    bass: float = Form(0.0),
+    is_8d: str = Form("false"),
+    vocal_remover: str = Form("false"),
+    eq: str = Form("+2,-4,-4,0,0,+2,+5,+7,+8"),
+    bitrate: str = Form("320k"),
+    custom_title: str = Form("Track (BStrack)")
 ):
+    input_path = f"temp_{file.filename}"
+    output_path = f"processed_{custom_title}.mp3"
+
     try:
-        temp_in = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        temp_in.write(await file.read())
-        temp_in.close()
+        with open(input_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-        audio = AudioSegment.from_file(temp_in.name)
+        filters = []
 
-        if speed != 1.0 and speed > 0:
-            audio = audio._spawn(audio.raw_data, overrides={
-                "frame_rate": int(audio.frame_rate * speed)
-            }).set_frame_rate(audio.frame_rate)
+        # 1. Vocal Remover filtri
+        if vocal_remover.lower() == "true":
+            filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
 
-        if bass > 0:
-            gain_db = (bass / 100.0) * 6.0
-            lows = audio.low_pass_filter(150).apply_gain(gain_db)
-            audio = audio.overlay(lows)
+        # 2. Speed (Atempo) filtri
+        if speed != 1.0:
+            filters.append(f"atempo={speed}")
 
+        # 3. Bass va Equalizer filtri
+        eq_vals = [float(x) for x in eq.split(",")]
+        if len(eq_vals) == 9:
+            filters.append(
+                f"equalizer=f=64:width_type=h:width=200:g={eq_vals[0]+(bass/10)},"
+                f"equalizer=f=160:width_type=h:width=200:g={eq_vals[1]},"
+                f"equalizer=f=400:width_type=h:width=200:g={eq_vals[2]},"
+                f"equalizer=f=1000:width_type=h:width=200:g={eq_vals[3]},"
+                f"equalizer=f=2500:width_type=h:width=200:g={eq_vals[4]},"
+                f"equalizer=f=6250:width_type=h:width=200:g={eq_vals[5]},"
+                f"equalizer=f=12500:width_type=h:width=200:g={eq_vals[6]},"
+                f"equalizer=f=16000:width_type=h:width=200:g={eq_vals[7]}"
+            )
+
+        # 4. Reverb filtri
         if reverb > 0:
-            delay_ms = int(50 + (reverb / 100.0) * 150)
-            decay = 0.3 + (reverb / 100.0) * 0.4
-            echo = audio.silent(duration=delay_ms) + (audio - int(decay * 10))
-            audio = audio.overlay(echo)
+            out_g = 0.88 * (reverb / 100)
+            filters.append(f"aecho=0.8:{out_g}:60:0.4")
 
-        temp_out = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        temp_out.close()
-        audio.export(temp_out.name, format="mp3")
+        # 5. 8D Audio filtri
+        if is_8d.lower() == "true":
+            filters.append("apulsator=hz=0.125")
 
-        os.remove(temp_in.name)
+        filter_complex = ",".join(filters) if filters else "anull"
 
-        return FileResponse(
-            temp_out.name,
-            media_type="audio/mpeg",
-            filename=f"processed_{file.filename}"
-        )
+        # FFmpeg buyrug'i
+        ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
+        
+        has_cover = os.path.exists("cover.jpg")
+        if has_cover:
+            ffmpeg_cmd.extend(["-i", "cover.jpg"])
+
+        ffmpeg_cmd.extend(["-af", filter_complex])
+
+        if has_cover:
+            ffmpeg_cmd.extend(["-map", "0:a", "-map", "1:v", "-c:v", "copy", "-disposition:v:0", "attached_pic"])
+
+        ffmpeg_cmd.extend([
+            "-b:a", bitrate,
+            "-metadata", f"title={custom_title}",
+            "-metadata", "artist=BStrack Studio",
+            output_path
+        ])
+
+        subprocess.run(ffmpeg_cmd, check=True)
+
+        if os.path.exists(input_path):
+            os.remove(input_path)
+
+        return FileResponse(output_path, media_type="audio/mpeg", filename=f"{custom_title}.mp3")
 
     except Exception as e:
+        if os.path.exists(input_path):
+            os.remove(input_path)
         raise HTTPException(status_code=500, detail=str(e))
