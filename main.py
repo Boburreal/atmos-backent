@@ -40,7 +40,7 @@ async def process_audio(
 
         filters = []
 
-        # 1. Vocal Remover (Kengaytirilgan vokal bosish va Center Channel Canceller)
+        # 1. Vocal Remover
         if vocal_remover.lower() == "true":
             filters.append("pan=stereo|c0=c0-c1|c1=c1-c0,equalizer=f=1000:width_type=h:width=3000:g=-24,superequalizer=1b=1:2b=1:3b=1:4b=0:5b=-10:6b=-10:7b=-10:8b=0:9b=1")
 
@@ -64,16 +64,19 @@ async def process_audio(
                 f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
             )
 
-        # 4. MUKAMMAL STEREO REVERB (Freeverb algoritmi)
+        # 4. MUKAMMAL SIFATLI STEREO REVERB
         if reverb > 0:
-            # Reverb miqdoriga qarab zal hajmi va wet-level hisoblanadi
-            room_size = round(0.2 + (reverb / 100.0) * 0.6, 2)  # 0.2 dan 0.8 gacha
-            wet_gain = round((reverb / 100.0) * 0.45, 2)        # Mayin va toza wet signal
-            dry_gain = 0.95                                     # Asl ovoz tiniqligi saqlanadi
+            in_gain = 0.9  # Asl ovozni saqlash (0.9 = 90% tiniq asl ovoz)
+            # Reverb foiziga qarab wet intensivligi aniqlanadi
+            r_val = (reverb / 100.0)
+            decay1 = round(0.15 * r_val, 2)
+            decay2 = round(0.25 * r_val, 2)
+            decay3 = round(0.35 * r_val, 2)
             
-            filters.append(f"freeverb=roomscale={room_size}:damping=0.4:wetlevel={wet_gain}:drylevel={dry_gain}:width=1.0")
+            # Keng stereo aks-sado va mayin hall effekti yaratish
+            filters.append(f"aecho={in_gain}:0.8:25|40|60:{decay1}|{decay2}|{decay3}")
 
-        # 5. 8D Audio (Ovoz balandligi tenglashtirilgan)
+        # 5. 8D Audio
         if is_8d.lower() == "true":
             filters.append("apulsator=hz=0.08,volume=1.35")
 
@@ -88,7 +91,7 @@ async def process_audio(
 
         ffmpeg_cmd.extend(["-af", filter_complex])
 
-        # Majburiy muqova (cover) qo'yish
+        # Cover yuklash
         if has_cover:
             ffmpeg_cmd.extend([
                 "-map", "0:a", 
