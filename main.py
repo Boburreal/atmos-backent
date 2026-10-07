@@ -38,21 +38,19 @@ async def process_audio(
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        audio_filters = []
+        # 1. Ketma-ket keluvchi asosiy audio filtrlar
+        pre_filters = []
 
-        # 1. Vocal Remover
         if vocal_remover.lower() == "true":
-            audio_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0,equalizer=f=1000:width_type=h:width=3000:g=-24,superequalizer=1b=1:2b=1:3b=1:4b=0:5b=-10:6b=-10:7b=-10:8b=0:9b=1")
+            pre_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0,equalizer=f=1000:width_type=h:width=3000:g=-24,superequalizer=1b=1:2b=1:3b=1:4b=0:5b=-10:6b=-10:7b=-10:8b=0:9b=1")
 
-        # 2. Speed (Atempo)
         if speed != 1.0:
-            audio_filters.append(f"atempo={speed}")
+            pre_filters.append(f"atempo={speed}")
 
-        # 3. Bass va Equalizer
         eq_vals = [float(x) for x in eq.split(",")]
         if len(eq_vals) == 9:
             extra_bass = (bass / 10)
-            audio_filters.append(
+            pre_filters.append(
                 f"equalizer=f=50:width_type=h:width=100:g={eq_vals[0]+extra_bass},"
                 f"equalizer=f=100:width_type=h:width=150:g={eq_vals[1]+(extra_bass*0.7)},"
                 f"equalizer=f=250:width_type=h:width=200:g={eq_vals[2]},"
@@ -64,39 +62,40 @@ async def process_audio(
                 f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
             )
 
-        # 4. MUKAMMAL HQ REVERB (Echo-siz, sof studio space)
+        if is_8d.lower() == "true":
+            pre_filters.append("apulsator=hz=0.08,volume=1.35")
+
+        pre_chain = ",".join(pre_filters) if pre_filters else "anull"
+
+        # 2. Filter Graph tayyorlash
+        filter_complex_parts = [f"[0:a]{pre_chain}[base]"]
+
         if reverb > 0:
             r_val = reverb / 100.0
-            
-            # Parametrlar: roomsize va damping
-            room = round(0.35 + r_val * 0.5, 2)
-            damp = round(0.25 + (1.0 - r_val) * 0.4, 2)
-            wet_vol = round(r_val * 0.45, 2)
-            
-            reverb_chain = (
-                f"asplit[dry][to_rev];"
-                f"[to_rev]freeverb=roomsize={room}:damping={damp}:wetlevel=1.0:drylevel=0.0:width=1.0,"
-                f"highpass=f=100,lowpass=f=10000,volume={wet_vol}[wet];"
-                f"[dry][wet]amix=inputs=2:weights=1.0 1.0:dropout_transition=0"
-            )
-            audio_filters.append(reverb_chain)
+            room = round(0.3 + r_val * 0.55, 2)
+            damp = round(0.2 + (1.0 - r_val) * 0.5, 2)
+            wet_vol = round(r_val * 0.5, 2)
 
-        # 5. 8D Audio
-        if is_8d.lower() == "true":
-            audio_filters.append("apulsator=hz=0.08,volume=1.35")
+            # Parallel Reverb Graph
+            filter_complex_parts.append("[base]asplit[dry][to_rev]")
+            filter_complex_parts.append(f"[to_rev]freeverb=roomsize={room}:damping={damp}:wetlevel=1.0:drylevel=0.0:width=1.0,highpass=f=120,lowpass=f=10000,volume={wet_vol}[wet]")
+            filter_complex_parts.append("[dry][wet]amix=inputs=2:weights=1.0 1.0:dropout_transition=0[outa]")
+            final_map = "[outa]"
+        else:
+            final_map = "[base]"
 
-        filter_complex_str = ",".join(audio_filters) if audio_filters else "anull"
+        filter_complex_str = ";".join(filter_complex_parts)
 
-        # FFmpeg buyrug'i
+        # FFmpeg komandasi
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
         
         has_cover = os.path.exists("cover.jpg")
         if has_cover:
             ffmpeg_cmd.extend(["-i", "cover.jpg"])
 
-        ffmpeg_cmd.extend(["-filter_complex", f"[0:a]{filter_complex_str}[outa]", "-map", "[outa]"])
+        ffmpeg_cmd.extend(["-filter_complex", filter_complex_str, "-map", final_map])
 
-        # Album cover biriktirish
+        # Album cover qo'shish
         if has_cover:
             ffmpeg_cmd.extend([
                 "-map", "1:v", 
