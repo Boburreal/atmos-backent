@@ -28,11 +28,11 @@ def read_root():
 async def process_audio(
     file: UploadFile = File(...),
     speed: float = Form(1.0),
-    reverb: float = Form(30.0), # Reverb kuchi tabiiy darajaga keltirildi
+    reverb: float = Form(45.0), # Keng zal uchun mos daraja
     bass: float = Form(0.0),
     is_8d: str = Form("false"),
     vocal_remover: str = Form("false"),
-    eq: str = Form("0,0,0,0,0,0,0,0,0"), # Toza muvozanat uchun
+    eq: str = Form("0,0,0,0,0,0,0,0,0"),
     bitrate: str = Form("320k"),
     custom_title: str = Form("")
 ):
@@ -44,25 +44,26 @@ async def process_audio(
     output_path = f"processed_{safe_title}.mp3"
 
     try:
+        # 1. Yuklangan faylni saqlash
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        audio_filters = []
+        filter_chains = []
 
-        # 1. Vocal Remover
+        # 2. Vocal Remover
         if vocal_remover.lower() == "true":
-            audio_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
+            filter_chains.append("pan=stereo|c0=c0-c1|c1=c1-c0")
 
-        # 2. Tezlik
+        # 3. Speed (Tezlik)
         if speed != 1.0:
-            audio_filters.append(f"atempo={speed}")
+            filter_chains.append(f"atempo={speed}")
 
-        # 3. Equalizer va Bass
+        # 4. Equalizer va Bass
         try:
             eq_vals = [float(x) for x in eq.split(",")]
             if len(eq_vals) == 9:
                 extra_bass = (bass / 10.0)
-                audio_filters.append(
+                filter_chains.append(
                     f"equalizer=f=60:width_type=h:width=50:g={eq_vals[0] + extra_bass},"
                     f"equalizer=f=170:width_type=h:width=100:g={eq_vals[1]},"
                     f"equalizer=f=310:width_type=h:width=200:g={eq_vals[2]},"
@@ -76,33 +77,44 @@ async def process_audio(
         except Exception:
             pass
 
-        # 4. 8D Audio
+        # 5. 8D Audio
         if is_8d.lower() == "true":
-            audio_filters.append("apulsator=hz=0.08,volume=1.2")
+            filter_chains.append("apulsator=hz=0.08,volume=1.2")
 
-        # 5. Saytdagidek mos va chuqur Reverb (decay kuchi 0.25 ga pasaytirildi)
+        # Filter zanjirini birlashtirish
+        base_filter_str = ",".join(filter_chains) if filter_chains else "anull"
+
+        # 6. Keng Zal Reverb (Large Hall Reverb + Parallel Stereo Echo)
         if reverb > 0:
-            decay = min(0.4, 0.15 + (reverb / 100.0) * 0.25)
-            audio_filters.append(f"aecho=0.8:0.88:60:{decay}")
+            rev_factor = min(0.65, 0.30 + (reverb / 100.0) * 0.35)
+            
+            # Complex filtergraph: Asl tiniq ovoz bilan keng zal aks-sadosini amix orqali aralashtirish
+            filter_complex = (
+                f"[0:a]{base_filter_str},split[orig][echo_in];"
+                f"[echo_in]aecho=0.8:0.7:80|140:{rev_factor}|{rev_factor*0.75},"
+                f"highpass=f=100,lowpass=f=10000[echo_out];"
+                f"[orig][echo_out]amix=inputs=2:weights=1.0 0.55:dropout_transition=0[aout]"
+            )
+        else:
+            filter_complex = f"[0:a]{base_filter_str}[aout]"
 
-        filter_str = ",".join(audio_filters) if audio_filters else "anull"
-
+        # 7. Cover rasmini izlash
         cover_path = None
         for possible_name in ["cover.jpg", "cover.png", "cover.jpeg"]:
             if os.path.exists(possible_name):
                 cover_path = possible_name
                 break
 
+        # 8. FFmpeg buyrug'i
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
 
         if cover_path:
             ffmpeg_cmd.extend(["-i", cover_path])
 
-        ffmpeg_cmd.extend(["-af", filter_str])
+        ffmpeg_cmd.extend(["-filter_complex", filter_complex, "-map", "[aout]"])
 
         if cover_path:
             ffmpeg_cmd.extend([
-                "-map", "0:a",
                 "-map", "1:v",
                 "-c:v", "copy",
                 "-disposition:v:0", "attached_pic",
