@@ -38,7 +38,6 @@ async def process_audio(
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Boshlang'ich filterlar ro'yxati
         audio_filters = []
 
         # 1. Vocal Remover
@@ -65,21 +64,19 @@ async def process_audio(
                 f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
             )
 
-        # 4. MUKAMMAL HQ REVERB (Echo-siz, toza studio space)
+        # 4. MUKAMMAL HQ REVERB (Echo-siz, sof studio space)
         if reverb > 0:
-            # Reverb miqdorini hisoblash (50% bo'lganda juda mukammal va toza zal effekti beradi)
             r_val = reverb / 100.0
             
-            # Reverb parametri: room_size (zal kattaligi), damp (yutilish), wet (reverb ovozi)
-            room = round(0.3 + r_val * 0.55, 2)       # 0.3 dan 0.85 gacha
-            damp = round(0.2 + (1.0 - r_val) * 0.5, 2) # Yuqori chastotali g'ovlamani yo'qotish
-            wet_vol = round(r_val * 0.5, 2)            # Wet signal kuchi
+            # Parametrlar: roomsize va damping
+            room = round(0.35 + r_val * 0.5, 2)
+            damp = round(0.25 + (1.0 - r_val) * 0.4, 2)
+            wet_vol = round(r_val * 0.45, 2)
             
-            # Asl ovozni saqlagan holda orqaga toza reverb qatlami qo'shiladi
             reverb_chain = (
                 f"asplit[dry][to_rev];"
-                f"[to_rev]freeverb=roomscale={room}:damping={damp}:wetlevel=1.0:drylevel=0.0:width=1.0,"
-                f"highpass=f=120,lowpass=f=10000,volume={wet_vol}[wet];"
+                f"[to_rev]freeverb=roomsize={room}:damping={damp}:wetlevel=1.0:drylevel=0.0:width=1.0,"
+                f"highpass=f=100,lowpass=f=10000,volume={wet_vol}[wet];"
                 f"[dry][wet]amix=inputs=2:weights=1.0 1.0:dropout_transition=0"
             )
             audio_filters.append(reverb_chain)
