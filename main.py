@@ -38,21 +38,22 @@ async def process_audio(
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        filters = []
+        # Boshlang'ich filterlar ro'yxati
+        audio_filters = []
 
         # 1. Vocal Remover
         if vocal_remover.lower() == "true":
-            filters.append("pan=stereo|c0=c0-c1|c1=c1-c0,equalizer=f=1000:width_type=h:width=3000:g=-24,superequalizer=1b=1:2b=1:3b=1:4b=0:5b=-10:6b=-10:7b=-10:8b=0:9b=1")
+            audio_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0,equalizer=f=1000:width_type=h:width=3000:g=-24,superequalizer=1b=1:2b=1:3b=1:4b=0:5b=-10:6b=-10:7b=-10:8b=0:9b=1")
 
         # 2. Speed (Atempo)
         if speed != 1.0:
-            filters.append(f"atempo={speed}")
+            audio_filters.append(f"atempo={speed}")
 
         # 3. Bass va Equalizer
         eq_vals = [float(x) for x in eq.split(",")]
         if len(eq_vals) == 9:
             extra_bass = (bass / 10)
-            filters.append(
+            audio_filters.append(
                 f"equalizer=f=50:width_type=h:width=100:g={eq_vals[0]+extra_bass},"
                 f"equalizer=f=100:width_type=h:width=150:g={eq_vals[1]+(extra_bass*0.7)},"
                 f"equalizer=f=250:width_type=h:width=200:g={eq_vals[2]},"
@@ -64,33 +65,30 @@ async def process_audio(
                 f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
             )
 
-        # 4. MUKAMMAL HQ STUDIO REVERB (Multi-Stage Stereo Space Reverb)
+        # 4. MUKAMMAL HQ REVERB (Echo-siz, toza studio space)
         if reverb > 0:
-            # Reverb kuchini foizga mos ravishda aniq hisoblash
-            r_ratio = reverb / 100.0  # 0.0 dan 1.0 gacha
+            # Reverb miqdorini hisoblash (50% bo'lganda juda mukammal va toza zal effekti beradi)
+            r_val = reverb / 100.0
             
-            # Aks-sado qaytish vaqtlari (ms) va intensivlik ko'rsatkichlari
-            d1 = int(35 + r_ratio * 45)    # Early reflections
-            d2 = int(70 + r_ratio * 75)    # Late reflections
-            d3 = int(120 + r_ratio * 110)  # Hall tail
+            # Reverb parametri: room_size (zal kattaligi), damp (yutilish), wet (reverb ovozi)
+            room = round(0.3 + r_val * 0.55, 2)       # 0.3 dan 0.85 gacha
+            damp = round(0.2 + (1.0 - r_val) * 0.5, 2) # Yuqori chastotali g'ovlamani yo'qotish
+            wet_vol = round(r_val * 0.5, 2)            # Wet signal kuchi
             
-            decay1 = round(0.25 + r_ratio * 0.45, 2)
-            decay2 = round(0.18 + r_ratio * 0.38, 2)
-            decay3 = round(0.10 + r_ratio * 0.30, 2)
-            
-            # Stereo reverb chain: aks-sado yuqori va pastki shovqinlarni tozalash (lowpass/highpass) va keng spatial sado
-            reverb_filter = (
-                f"aecho=0.85:0.88:{d1}|{d2}|{d3}:{decay1}|{decay2}|{decay3},"
-                f"highpass=f=80,"
-                f"lowpass=f=11000"
+            # Asl ovozni saqlagan holda orqaga toza reverb qatlami qo'shiladi
+            reverb_chain = (
+                f"asplit[dry][to_rev];"
+                f"[to_rev]freeverb=roomscale={room}:damping={damp}:wetlevel=1.0:drylevel=0.0:width=1.0,"
+                f"highpass=f=120,lowpass=f=10000,volume={wet_vol}[wet];"
+                f"[dry][wet]amix=inputs=2:weights=1.0 1.0:dropout_transition=0"
             )
-            filters.append(reverb_filter)
+            audio_filters.append(reverb_chain)
 
-        # 5. 8D Audio (Pan Effect)
+        # 5. 8D Audio
         if is_8d.lower() == "true":
-            filters.append("apulsator=hz=0.08,volume=1.35")
+            audio_filters.append("apulsator=hz=0.08,volume=1.35")
 
-        filter_complex = ",".join(filters) if filters else "anull"
+        filter_complex_str = ",".join(audio_filters) if audio_filters else "anull"
 
         # FFmpeg buyrug'i
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
@@ -99,12 +97,11 @@ async def process_audio(
         if has_cover:
             ffmpeg_cmd.extend(["-i", "cover.jpg"])
 
-        ffmpeg_cmd.extend(["-af", filter_complex])
+        ffmpeg_cmd.extend(["-filter_complex", f"[0:a]{filter_complex_str}[outa]", "-map", "[outa]"])
 
-        # Cover image biriktirish
+        # Album cover biriktirish
         if has_cover:
             ffmpeg_cmd.extend([
-                "-map", "0:a", 
                 "-map", "1:v", 
                 "-c:v", "mjpeg", 
                 "-disposition:v:0", "attached_pic",
