@@ -28,15 +28,14 @@ def read_root():
 async def process_audio(
     file: UploadFile = File(...),
     speed: float = Form(1.0),
-    reverb: float = Form(45.0), # Standart reverb darajasi 45% ga oshirildi
+    reverb: float = Form(30.0), # Reverb kuchi tabiiy darajaga keltirildi
     bass: float = Form(0.0),
     is_8d: str = Form("false"),
     vocal_remover: str = Form("false"),
-    eq: str = Form("+2,-3,-3,0,0,+2,+5,+7,+8"),
+    eq: str = Form("0,0,0,0,0,0,0,0,0"), # Toza muvozanat uchun
     bitrate: str = Form("320k"),
-    custom_title: str = Form("") # BStrack avtomatik qo'shilishi olib tashlandi
+    custom_title: str = Form("")
 ):
-    # Agar nom berilmagan bo'lsa, asl fayl nomini olish
     base_name = os.path.splitext(file.filename)[0] if file.filename else "track"
     final_title = custom_title.strip() if custom_title.strip() else base_name
     
@@ -45,21 +44,20 @@ async def process_audio(
     output_path = f"processed_{safe_title}.mp3"
 
     try:
-        # 1. Yuklangan faylni saqlash
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
         audio_filters = []
 
-        # 2. Vocal Remover
+        # 1. Vocal Remover
         if vocal_remover.lower() == "true":
             audio_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
 
-        # 3. Speed (Tezlik)
+        # 2. Tezlik
         if speed != 1.0:
             audio_filters.append(f"atempo={speed}")
 
-        # 4. 9-polosali EQ (Saytdagidek aniq balans)
+        # 3. Equalizer va Bass
         try:
             eq_vals = [float(x) for x in eq.split(",")]
             if len(eq_vals) == 9:
@@ -78,24 +76,23 @@ async def process_audio(
         except Exception:
             pass
 
-        # 5. 8D Audio
+        # 4. 8D Audio
         if is_8d.lower() == "true":
-            audio_filters.append("apulsator=hz=0.08,volume=1.35")
+            audio_filters.append("apulsator=hz=0.08,volume=1.2")
 
-        # 6. Chuqur va hajmli Reverb (Saytdagi 45% effekti bilan bir xil)
+        # 5. Saytdagidek mos va chuqur Reverb (decay kuchi 0.25 ga pasaytirildi)
         if reverb > 0:
-            audio_filters.append("aecho=0.8:0.88:60:0.45")
+            decay = min(0.4, 0.15 + (reverb / 100.0) * 0.25)
+            audio_filters.append(f"aecho=0.8:0.88:60:{decay}")
 
         filter_str = ",".join(audio_filters) if audio_filters else "anull"
 
-        # 7. Cover faylini izlash
         cover_path = None
         for possible_name in ["cover.jpg", "cover.png", "cover.jpeg"]:
             if os.path.exists(possible_name):
                 cover_path = possible_name
                 break
 
-        # 8. FFmpeg buyrug'i
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
 
         if cover_path:
