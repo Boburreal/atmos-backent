@@ -1,6 +1,7 @@
 import os
 import subprocess
 import shutil
+import re
 import traceback
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
@@ -15,6 +16,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def sanitize_filename(name: str) -> str:
+    # Fayl nomidagi xavfli belgilarni tozalash
+    cleaned = re.sub(r'[^\w\s\-\.]', '', name)
+    return cleaned.strip() or "track"
 
 @app.get("/")
 def read_root():
@@ -32,14 +38,15 @@ async def process_audio(
     bitrate: str = Form("320k"),
     custom_title: str = Form("Track (BStrack)")
 ):
-    input_path = f"temp_{file.filename}"
-    output_path = f"processed_{custom_title}.mp3"
+    safe_title = sanitize_filename(custom_title)
+    input_path = "temp_input.mp3"
+    output_path = f"processed_{safe_title}.mp3"
 
     try:
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 1. Последовательные базовые фильтры
+        # 1. Asosiy audio filtrlar
         pre_filters = []
 
         if vocal_remover.lower() == "true":
@@ -48,7 +55,7 @@ async def process_audio(
         if speed != 1.0:
             pre_filters.append(f"atempo={speed}")
 
-        # Эквалайзер и Басс
+        # Equalisator & Bass Boost
         try:
             eq_vals = [float(x) for x in eq.split(",")]
             if len(eq_vals) == 9:
@@ -72,17 +79,17 @@ async def process_audio(
 
         pre_chain = ",".join(pre_filters) if pre_filters else "anull"
 
-        # 2. Построение filter_complex
+        # 2. Filter complex tayyorlash (Reverb xatosiz rejimda)
         filter_complex_parts = [f"[0:a]{pre_chain}[base]"]
 
         if reverb > 0:
-            r_val = reverb / 100.0
+            r_val = min(max(reverb / 100.0, 0.1), 1.0)
             room = round(0.2 + r_val * 0.6, 2)
             damp = round(0.2 + (1.0 - r_val) * 0.5, 2)
-            wet_vol = round(r_val * 0.5, 2)
+            wet_vol = round(r_val * 0.45, 2)
 
             filter_complex_parts.append("[base]asplit[dry][to_rev]")
-            filter_complex_parts.append(f"[to_rev]freeverb=roomscale={room}:damping={damp}:wetlevel=1.0:drylevel=0.0,volume={wet_vol}[wet]")
+            filter_complex_parts.append(f"[to_rev]freeverb=roomsize={room}:damping={damp}:wetlevel=1.0:drylevel=0.0,volume={wet_vol}[wet]")
             filter_complex_parts.append("[dry][wet]amix=inputs=2:weights=1.0 1.0:dropout_transition=0[outa]")
             final_map = "[outa]"
         else:
@@ -90,7 +97,7 @@ async def process_audio(
 
         filter_complex_str = ";".join(filter_complex_parts)
 
-        # 3. Сборка команды FFmpeg
+        # 3. FFmpeg buyrug'i
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
         
         cover_path = "cover.jpg"
@@ -116,17 +123,16 @@ async def process_audio(
             output_path
         ])
 
-        # Запуск процесса с перехватом ошибок
         process = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
         if process.returncode != 0:
-            print("FFmpeg Error:", process.stderr)
-            raise Exception(f"FFmpeg failed: {process.stderr[-300:]}")
+            print("FFmpeg Error Logs:", process.stderr)
+            raise Exception(f"FFmpeg error: {process.stderr[-200:]}")
 
         if os.path.exists(input_path):
             os.remove(input_path)
 
-        return FileResponse(output_path, media_type="audio/mpeg", filename=f"{custom_title}.mp3")
+        return FileResponse(output_path, media_type="audio/mpeg", filename=f"{safe_title}.mp3")
 
     except Exception as e:
         if os.path.exists(input_path):
