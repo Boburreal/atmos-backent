@@ -41,44 +41,72 @@ async def process_audio(
     output_path = f"processed_{safe_title}.mp3"
 
     try:
+        # 1. Yuklangan faylni saqlash
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 1. Аудиофильтры
         audio_filters = []
 
+        # 2. Vocal Remover (agar yoqilgan bo'lsa)
         if vocal_remover.lower() == "true":
             audio_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
 
+        # 3. Tezlik (Speed)
         if speed != 1.0:
             audio_filters.append(f"atempo={speed}")
 
+        # 4. ai-audio-editor saytidagi aniq 9-polosali EQ sozlamalari
+        # 60Hz(+2), 170Hz(-3), 310Hz(-3), 600Hz(0), 1k(0), 3k(+2), 6k(+5), 12k(+7), 16k(+8)
+        try:
+            eq_vals = [float(x) for x in eq.split(",")]
+            if len(eq_vals) == 9:
+                extra_bass = (bass / 10.0)
+                audio_filters.append(
+                    f"equalizer=f=60:width_type=h:width=50:g={eq_vals[0] + extra_bass},"
+                    f"equalizer=f=170:width_type=h:width=100:g={eq_vals[1]},"
+                    f"equalizer=f=310:width_type=h:width=200:g={eq_vals[2]},"
+                    f"equalizer=f=600:width_type=h:width=300:g={eq_vals[3]},"
+                    f"equalizer=f=1000:width_type=h:width=500:g={eq_vals[4]},"
+                    f"equalizer=f=3000:width_type=h:width=1000:g={eq_vals[5]},"
+                    f"equalizer=f=6000:width_type=h:width=2000:g={eq_vals[6]},"
+                    f"equalizer=f=12000:width_type=h:width=3000:g={eq_vals[7]},"
+                    f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
+                )
+        except Exception:
+            pass
+
+        # 5. 8D Audio
         if is_8d.lower() == "true":
             audio_filters.append("apulsator=hz=0.08,volume=1.35")
 
+        # 6. slowedandreverb.studio saytidagi kabi 45% Reverb effekti
         if reverb > 0:
-            r_val = min(max(reverb / 100.0, 0.1), 1.0)
+            r_val = min(max(reverb / 100.0, 0.05), 1.0)
             audio_filters.append(f"aecho=0.8:0.88:60:{r_val}")
 
         filter_str = ",".join(audio_filters) if audio_filters else "anull"
 
-        # 2. Проверка наличия обложки
-        cover_path = "cover.jpg"
-        has_cover = os.path.exists(cover_path)
+        # 7. Oblozka faylini avtomatik topish
+        cover_path = None
+        for possible_name in ["cover.jpg", "cover.jpg.jpg", "cover.png", "cover.jpeg"]:
+            if os.path.exists(possible_name):
+                cover_path = possible_name
+                break
 
-        # 3. Сборка команды FFmpeg
+        # 8. FFmpeg buyrug'ini tayyorlash
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
 
-        if has_cover:
+        if cover_path:
             ffmpeg_cmd.extend(["-i", cover_path])
 
         ffmpeg_cmd.extend(["-af", filter_str])
 
-        if has_cover:
+        # Oblozkani AIMP va Telegram pleyerlariga to'g'ri o'tkazish
+        if cover_path:
             ffmpeg_cmd.extend([
                 "-map", "0:a",
                 "-map", "1:v",
-                "-c:v", "mjpeg",
+                "-c:v", "copy",
                 "-disposition:v:0", "attached_pic",
                 "-id3v2_version", "3"
             ])
@@ -90,11 +118,11 @@ async def process_audio(
             output_path
         ])
 
-        # 4. Выполнение FFmpeg
+        # 9. FFmpeg ni bajarish
         process = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if process.returncode != 0:
-            err_msg = process.stderr[-300:] if process.stderr else "Ошибка выполнения FFmpeg"
+            err_msg = process.stderr[-300:] if process.stderr else "FFmpeg bajarishda xatolik"
             raise Exception(f"FFmpeg Error: {err_msg}")
 
         if os.path.exists(input_path):
