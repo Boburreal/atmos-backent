@@ -44,7 +44,7 @@ async def process_audio(
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Simplest FFmpeg test with high compatibility
+        # 1. Аудиофильтры
         audio_filters = []
 
         if vocal_remover.lower() == "true":
@@ -62,17 +62,39 @@ async def process_audio(
 
         filter_str = ",".join(audio_filters) if audio_filters else "anull"
 
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-i", input_path,
-            "-af", filter_str,
-            "-b:a", bitrate,
-            output_path
-        ]
+        # 2. Проверка наличия обложки
+        cover_path = "cover.jpg"
+        has_cover = os.path.exists(cover_path)
 
+        # 3. Сборка команды FFmpeg
+        ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
+
+        if has_cover:
+            ffmpeg_cmd.extend(["-i", cover_path])
+
+        ffmpeg_cmd.extend(["-af", filter_str])
+
+        if has_cover:
+            ffmpeg_cmd.extend([
+                "-map", "0:a",
+                "-map", "1:v",
+                "-c:v", "mjpeg",
+                "-disposition:v:0", "attached_pic",
+                "-id3v2_version", "3"
+            ])
+
+        ffmpeg_cmd.extend([
+            "-b:a", bitrate,
+            "-metadata", f"title={custom_title}",
+            "-metadata", "artist=BStrack",
+            output_path
+        ])
+
+        # 4. Выполнение FFmpeg
         process = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        
+
         if process.returncode != 0:
-            err_msg = process.stderr[-300:] if process.stderr else "FFmpeg bajarishda noaniq xatolik"
+            err_msg = process.stderr[-300:] if process.stderr else "Ошибка выполнения FFmpeg"
             raise Exception(f"FFmpeg Error: {err_msg}")
 
         if os.path.exists(input_path):
@@ -83,5 +105,4 @@ async def process_audio(
     except Exception as e:
         if os.path.exists(input_path):
             os.remove(input_path)
-        # Haqiqiy xatolikni HTTP 500 orqali frontendga uzatamiz
         raise HTTPException(status_code=500, detail=str(e))
