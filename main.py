@@ -64,12 +64,16 @@ async def process_audio(
                 f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
             )
 
-        # 4. Reverb
+        # 4. MUKAMMAL STEREO REVERB (Freeverb algoritmi)
         if reverb > 0:
-            out_g = 0.85 * (reverb / 100)
-            filters.append(f"aecho=0.8:{out_g}:50:0.35")
+            # Reverb miqdoriga qarab zal hajmi va wet-level hisoblanadi
+            room_size = round(0.2 + (reverb / 100.0) * 0.6, 2)  # 0.2 dan 0.8 gacha
+            wet_gain = round((reverb / 100.0) * 0.45, 2)        # Mayin va toza wet signal
+            dry_gain = 0.95                                     # Asl ovoz tiniqligi saqlanadi
+            
+            filters.append(f"freeverb=roomscale={room_size}:damping=0.4:wetlevel={wet_gain}:drylevel={dry_gain}:width=1.0")
 
-        # 5. 8D Audio (Ovoz pasayishini oldini olish uchun volume=1.35 qo'shildi)
+        # 5. 8D Audio (Ovoz balandligi tenglashtirilgan)
         if is_8d.lower() == "true":
             filters.append("apulsator=hz=0.08,volume=1.35")
 
@@ -84,7 +88,7 @@ async def process_audio(
 
         ffmpeg_cmd.extend(["-af", filter_complex])
 
-        # Majburiy surat qo'yish (eski rasmlarni to'liq tozalash bilan)
+        # Majburiy muqova (cover) qo'yish
         if has_cover:
             ffmpeg_cmd.extend([
                 "-map", "0:a", 
