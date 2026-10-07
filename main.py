@@ -27,7 +27,7 @@ async def process_audio(
     bass: float = Form(0.0),
     is_8d: str = Form("false"),
     vocal_remover: str = Form("false"),
-    eq: str = Form("+2,-4,-4,0,0,+2,+5,+7,+8"),
+    eq: str = Form("+2,-3,-3,0,0,+2,+5,+7,+8"),
     bitrate: str = Form("320k"),
     custom_title: str = Form("Track (BStrack)")
 ):
@@ -40,10 +40,9 @@ async def process_audio(
 
         filters = []
 
-        # 1. Vocal Remover (Artist ovozini o'chirish / Instrumental)
+        # 1. Vocal Remover (Kengaytirilgan vokal bosish va Center Channel Canceller)
         if vocal_remover.lower() == "true":
-            # Center Channel Inversion + Vocal Band Stop
-            filters.append("pan=stereo|c0=c0-c1|c1=c1-c0,equalizer=f=1000:width_type=h:width=2000:g=-15")
+            filters.append("pan=stereo|c0=c0-c1|c1=c1-c0,equalizer=f=1000:width_type=h:width=3000:g=-24,superequalizer=1b=1:2b=1:3b=1:4b=0:5b=-10:6b=-10:7b=-10:8b=0:9b=1")
 
         # 2. Speed (Atempo)
         if speed != 1.0:
@@ -52,29 +51,31 @@ async def process_audio(
         # 3. Bass va Equalizer
         eq_vals = [float(x) for x in eq.split(",")]
         if len(eq_vals) == 9:
+            extra_bass = (bass / 10)
             filters.append(
-                f"equalizer=f=64:width_type=h:width=200:g={eq_vals[0]+(bass/10)},"
-                f"equalizer=f=160:width_type=h:width=200:g={eq_vals[1]},"
-                f"equalizer=f=400:width_type=h:width=200:g={eq_vals[2]},"
-                f"equalizer=f=1000:width_type=h:width=200:g={eq_vals[3]},"
-                f"equalizer=f=2500:width_type=h:width=200:g={eq_vals[4]},"
-                f"equalizer=f=6250:width_type=h:width=200:g={eq_vals[5]},"
-                f"equalizer=f=12500:width_type=h:width=200:g={eq_vals[6]},"
-                f"equalizer=f=16000:width_type=h:width=200:g={eq_vals[7]}"
+                f"equalizer=f=50:width_type=h:width=100:g={eq_vals[0]+extra_bass},"
+                f"equalizer=f=100:width_type=h:width=150:g={eq_vals[1]+(extra_bass*0.7)},"
+                f"equalizer=f=250:width_type=h:width=200:g={eq_vals[2]},"
+                f"equalizer=f=600:width_type=h:width=300:g={eq_vals[3]},"
+                f"equalizer=f=1500:width_type=h:width=500:g={eq_vals[4]},"
+                f"equalizer=f=4000:width_type=h:width=1000:g={eq_vals[5]},"
+                f"equalizer=f=8000:width_type=h:width=2000:g={eq_vals[6]},"
+                f"equalizer=f=12000:width_type=h:width=3000:g={eq_vals[7]},"
+                f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
             )
 
         # 4. Reverb
         if reverb > 0:
-            out_g = 0.88 * (reverb / 100)
-            filters.append(f"aecho=0.8:{out_g}:60:0.4")
+            out_g = 0.85 * (reverb / 100)
+            filters.append(f"aecho=0.8:{out_g}:50:0.35")
 
-        # 5. 8D Audio (Aylanish tezligi sekinlashtirildi: hz=0.08)
+        # 5. 8D Audio (Ovoz pasayishini oldini olish uchun volume=1.35 qo'shildi)
         if is_8d.lower() == "true":
-            filters.append("apulsator=hz=0.08")
+            filters.append("apulsator=hz=0.08,volume=1.35")
 
         filter_complex = ",".join(filters) if filters else "anull"
 
-        # FFmpeg Buyrug'i
+        # FFmpeg buyrug'i
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
         
         has_cover = os.path.exists("cover.jpg")
@@ -83,13 +84,15 @@ async def process_audio(
 
         ffmpeg_cmd.extend(["-af", filter_complex])
 
-        # Asl rasmni o'chirib, o'rniga yangi cover.jpg rasmini majburiy (override) qo'yish
+        # Majburiy surat qo'yish (eski rasmlarni to'liq tozalash bilan)
         if has_cover:
             ffmpeg_cmd.extend([
                 "-map", "0:a", 
                 "-map", "1:v", 
                 "-c:v", "mjpeg", 
                 "-disposition:v:0", "attached_pic",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (BStrack)",
                 "-id3v2_version", "3"
             ])
 
