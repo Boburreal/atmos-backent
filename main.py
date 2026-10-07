@@ -64,19 +64,29 @@ async def process_audio(
                 f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
             )
 
-        # 4. MUKAMMAL SIFATLI STEREO REVERB
+        # 4. MUKAMMAL HQ STUDIO REVERB (Multi-Stage Stereo Space Reverb)
         if reverb > 0:
-            in_gain = 0.9  # Asl ovozni saqlash (0.9 = 90% tiniq asl ovoz)
-            # Reverb foiziga qarab wet intensivligi aniqlanadi
-            r_val = (reverb / 100.0)
-            decay1 = round(0.15 * r_val, 2)
-            decay2 = round(0.25 * r_val, 2)
-            decay3 = round(0.35 * r_val, 2)
+            # Reverb kuchini foizga mos ravishda aniq hisoblash
+            r_ratio = reverb / 100.0  # 0.0 dan 1.0 gacha
             
-            # Keng stereo aks-sado va mayin hall effekti yaratish
-            filters.append(f"aecho={in_gain}:0.8:25|40|60:{decay1}|{decay2}|{decay3}")
+            # Aks-sado qaytish vaqtlari (ms) va intensivlik ko'rsatkichlari
+            d1 = int(35 + r_ratio * 45)    # Early reflections
+            d2 = int(70 + r_ratio * 75)    # Late reflections
+            d3 = int(120 + r_ratio * 110)  # Hall tail
+            
+            decay1 = round(0.25 + r_ratio * 0.45, 2)
+            decay2 = round(0.18 + r_ratio * 0.38, 2)
+            decay3 = round(0.10 + r_ratio * 0.30, 2)
+            
+            # Stereo reverb chain: aks-sado yuqori va pastki shovqinlarni tozalash (lowpass/highpass) va keng spatial sado
+            reverb_filter = (
+                f"aecho=0.85:0.88:{d1}|{d2}|{d3}:{decay1}|{decay2}|{decay3},"
+                f"highpass=f=80,"
+                f"lowpass=f=11000"
+            )
+            filters.append(reverb_filter)
 
-        # 5. 8D Audio
+        # 5. 8D Audio (Pan Effect)
         if is_8d.lower() == "true":
             filters.append("apulsator=hz=0.08,volume=1.35")
 
@@ -91,7 +101,7 @@ async def process_audio(
 
         ffmpeg_cmd.extend(["-af", filter_complex])
 
-        # Cover yuklash
+        # Cover image biriktirish
         if has_cover:
             ffmpeg_cmd.extend([
                 "-map", "0:a", 
