@@ -28,7 +28,7 @@ def read_root():
 async def process_audio(
     file: UploadFile = File(...),
     speed: float = Form(1.0),
-    reverb: float = Form(30.0), # Interfeys va Bot uchun bir xil mo'tadil reverb
+    reverb: float = Form(45.0),
     bass: float = Form(0.0),
     is_8d: str = Form("false"),
     vocal_remover: str = Form("false"),
@@ -44,26 +44,26 @@ async def process_audio(
     output_path = f"processed_{safe_title}.mp3"
 
     try:
-        # 1. Yuklangan faylni saqlash
+        # 1. Faylni vaqtinchalik saqlash
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        filter_chains = []
+        audio_filters = []
 
         # 2. Vocal Remover
         if vocal_remover.lower() == "true":
-            filter_chains.append("pan=stereo|c0=c0-c1|c1=c1-c0")
+            audio_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
 
         # 3. Speed (Tezlik)
         if speed != 1.0:
-            filter_chains.append(f"atempo={speed}")
+            audio_filters.append(f"atempo={speed}")
 
         # 4. Equalizer va Bass
         try:
             eq_vals = [float(x) for x in eq.split(",")]
             if len(eq_vals) == 9:
                 extra_bass = (bass / 10.0)
-                filter_chains.append(
+                audio_filters.append(
                     f"equalizer=f=60:width_type=h:width=50:g={eq_vals[0] + extra_bass},"
                     f"equalizer=f=170:width_type=h:width=100:g={eq_vals[1]},"
                     f"equalizer=f=310:width_type=h:width=200:g={eq_vals[2]},"
@@ -79,22 +79,15 @@ async def process_audio(
 
         # 5. 8D Audio
         if is_8d.lower() == "true":
-            filter_chains.append("apulsator=hz=0.08,volume=1.2")
+            audio_filters.append("apulsator=hz=0.08,volume=1.2")
 
-        base_filter_str = ",".join(filter_chains) if filter_chains else "anull"
-
-        # 6. Balanslangan Keng Zal Reverb (O'ta kuchayib ketmasligi uchun factor 0.35 ga tushirildi)
+        # 6. Tiniq va Keng Reverb (Backend crashing berrmaydigan xatosiz strukturada)
         if reverb > 0:
-            rev_factor = min(0.40, 0.15 + (reverb / 100.0) * 0.25)
-            
-            filter_complex = (
-                f"[0:a]{base_filter_str},split[orig][echo_in];"
-                f"[echo_in]aecho=0.8:0.7:70|120:{rev_factor}|{rev_factor*0.7},"
-                f"highpass=f=120,lowpass=f=9000[echo_out];"
-                f"[orig][echo_out]amix=inputs=2:weights=1.0 0.35:dropout_transition=0[aout]"
-            )
-        else:
-            filter_complex = f"[0:a]{base_filter_str}[aout]"
+            # Reverb kuchi va so'nish parametri
+            decay = min(0.38, 0.15 + (reverb / 100.0) * 0.23)
+            audio_filters.append(f"aecho=0.8:0.88:80|120:{decay}|{decay*0.75}")
+
+        filter_str = ",".join(audio_filters) if audio_filters else "anull"
 
         # 7. Cover rasmini izlash
         cover_path = None
@@ -103,16 +96,17 @@ async def process_audio(
                 cover_path = possible_name
                 break
 
-        # 8. FFmpeg buyrug'i
+        # 8. FFmpeg buyrug'i (-af parametri orqali barqaror ishlaydi)
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
 
         if cover_path:
             ffmpeg_cmd.extend(["-i", cover_path])
 
-        ffmpeg_cmd.extend(["-filter_complex", filter_complex, "-map", "[aout]"])
+        ffmpeg_cmd.extend(["-af", filter_str])
 
         if cover_path:
             ffmpeg_cmd.extend([
+                "-map", "0:a",
                 "-map", "1:v",
                 "-c:v", "copy",
                 "-disposition:v:0", "attached_pic",
