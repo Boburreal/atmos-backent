@@ -2,7 +2,6 @@ import os
 import subprocess
 import shutil
 import re
-import traceback
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +17,6 @@ app.add_middleware(
 )
 
 def sanitize_filename(name: str) -> str:
-    # Fayl nomidagi xavfli belgilarni tozalash
     cleaned = re.sub(r'[^\w\s\-\.]', '', name)
     return cleaned.strip() or "track"
 
@@ -39,95 +37,43 @@ async def process_audio(
     custom_title: str = Form("Track (BStrack)")
 ):
     safe_title = sanitize_filename(custom_title)
-    input_path = "temp_input.mp3"
+    input_path = f"temp_input_{safe_title}.mp3"
     output_path = f"processed_{safe_title}.mp3"
 
     try:
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 1. Asosiy audio filtrlar
-        pre_filters = []
+        # Simplest FFmpeg test with high compatibility
+        audio_filters = []
 
         if vocal_remover.lower() == "true":
-            pre_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
+            audio_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
 
         if speed != 1.0:
-            pre_filters.append(f"atempo={speed}")
-
-        # Equalisator & Bass Boost
-        try:
-            eq_vals = [float(x) for x in eq.split(",")]
-            if len(eq_vals) == 9:
-                extra_bass = (bass / 10)
-                pre_filters.append(
-                    f"equalizer=f=50:width_type=h:width=100:g={eq_vals[0]+extra_bass},"
-                    f"equalizer=f=100:width_type=h:width=150:g={eq_vals[1]+(extra_bass*0.7)},"
-                    f"equalizer=f=250:width_type=h:width=200:g={eq_vals[2]},"
-                    f"equalizer=f=600:width_type=h:width=300:g={eq_vals[3]},"
-                    f"equalizer=f=1500:width_type=h:width=500:g={eq_vals[4]},"
-                    f"equalizer=f=4000:width_type=h:width=1000:g={eq_vals[5]},"
-                    f"equalizer=f=8000:width_type=h:width=2000:g={eq_vals[6]},"
-                    f"equalizer=f=12000:width_type=h:width=3000:g={eq_vals[7]},"
-                    f"equalizer=f=16000:width_type=h:width=4000:g={eq_vals[8]}"
-                )
-        except Exception:
-            pass
+            audio_filters.append(f"atempo={speed}")
 
         if is_8d.lower() == "true":
-            pre_filters.append("apulsator=hz=0.08,volume=1.35")
-
-        pre_chain = ",".join(pre_filters) if pre_filters else "anull"
-
-        # 2. Filter complex tayyorlash (Reverb xatosiz rejimda)
-        filter_complex_parts = [f"[0:a]{pre_chain}[base]"]
+            audio_filters.append("apulsator=hz=0.08,volume=1.35")
 
         if reverb > 0:
             r_val = min(max(reverb / 100.0, 0.1), 1.0)
-            room = round(0.2 + r_val * 0.6, 2)
-            damp = round(0.2 + (1.0 - r_val) * 0.5, 2)
-            wet_vol = round(r_val * 0.45, 2)
+            audio_filters.append(f"aecho=0.8:0.88:60:{r_val}")
 
-            filter_complex_parts.append("[base]asplit[dry][to_rev]")
-            filter_complex_parts.append(f"[to_rev]freeverb=roomsize={room}:damping={damp}:wetlevel=1.0:drylevel=0.0,volume={wet_vol}[wet]")
-            filter_complex_parts.append("[dry][wet]amix=inputs=2:weights=1.0 1.0:dropout_transition=0[outa]")
-            final_map = "[outa]"
-        else:
-            final_map = "[base]"
+        filter_str = ",".join(audio_filters) if audio_filters else "anull"
 
-        filter_complex_str = ";".join(filter_complex_parts)
-
-        # 3. FFmpeg buyrug'i
-        ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
-        
-        cover_path = "cover.jpg"
-        has_cover = os.path.exists(cover_path)
-        
-        if has_cover:
-            ffmpeg_cmd.extend(["-i", cover_path])
-
-        ffmpeg_cmd.extend(["-filter_complex", filter_complex_str, "-map", final_map])
-
-        if has_cover:
-            ffmpeg_cmd.extend([
-                "-map", "1:v", 
-                "-c:v", "mjpeg", 
-                "-disposition:v:0", "attached_pic",
-                "-id3v2_version", "3"
-            ])
-
-        ffmpeg_cmd.extend([
+        ffmpeg_cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-af", filter_str,
             "-b:a", bitrate,
-            "-metadata", f"title={custom_title}",
-            "-metadata", "artist=BStrack Studio",
             output_path
-        ])
+        ]
 
         process = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
         if process.returncode != 0:
-            print("FFmpeg Error Logs:", process.stderr)
-            raise Exception(f"FFmpeg error: {process.stderr[-200:]}")
+            err_msg = process.stderr[-300:] if process.stderr else "FFmpeg bajarishda noaniq xatolik"
+            raise Exception(f"FFmpeg Error: {err_msg}")
 
         if os.path.exists(input_path):
             os.remove(input_path)
@@ -137,5 +83,5 @@ async def process_audio(
     except Exception as e:
         if os.path.exists(input_path):
             os.remove(input_path)
-        print("Backend exception:", traceback.format_exc())
+        # Haqiqiy xatolikni HTTP 500 orqali frontendga uzatamiz
         raise HTTPException(status_code=500, detail=str(e))
