@@ -28,15 +28,19 @@ def read_root():
 async def process_audio(
     file: UploadFile = File(...),
     speed: float = Form(1.0),
-    reverb: float = Form(0.0),
+    reverb: float = Form(45.0), # Standart reverb darajasi 45% ga oshirildi
     bass: float = Form(0.0),
     is_8d: str = Form("false"),
     vocal_remover: str = Form("false"),
     eq: str = Form("+2,-3,-3,0,0,+2,+5,+7,+8"),
     bitrate: str = Form("320k"),
-    custom_title: str = Form("Track (BStrack)")
+    custom_title: str = Form("") # BStrack avtomatik qo'shilishi olib tashlandi
 ):
-    safe_title = sanitize_filename(custom_title)
+    # Agar nom berilmagan bo'lsa, asl fayl nomini olish
+    base_name = os.path.splitext(file.filename)[0] if file.filename else "track"
+    final_title = custom_title.strip() if custom_title.strip() else base_name
+    
+    safe_title = sanitize_filename(final_title)
     input_path = f"temp_input_{safe_title}.mp3"
     output_path = f"processed_{safe_title}.mp3"
 
@@ -47,16 +51,15 @@ async def process_audio(
 
         audio_filters = []
 
-        # 2. Vocal Remover (agar yoqilgan bo'lsa)
+        # 2. Vocal Remover
         if vocal_remover.lower() == "true":
             audio_filters.append("pan=stereo|c0=c0-c1|c1=c1-c0")
 
-        # 3. Tezlik (Speed)
+        # 3. Speed (Tezlik)
         if speed != 1.0:
             audio_filters.append(f"atempo={speed}")
 
-        # 4. ai-audio-editor saytidagi aniq 9-polosali EQ sozlamalari
-        # 60Hz(+2), 170Hz(-3), 310Hz(-3), 600Hz(0), 1k(0), 3k(+2), 6k(+5), 12k(+7), 16k(+8)
+        # 4. 9-polosali EQ (Saytdagidek aniq balans)
         try:
             eq_vals = [float(x) for x in eq.split(",")]
             if len(eq_vals) == 9:
@@ -79,21 +82,20 @@ async def process_audio(
         if is_8d.lower() == "true":
             audio_filters.append("apulsator=hz=0.08,volume=1.35")
 
-        # 6. slowedandreverb.studio saytidagi kabi 45% Reverb effekti
+        # 6. Chuqur va hajmli Reverb (Saytdagi 45% effekti bilan bir xil)
         if reverb > 0:
-            r_val = min(max(reverb / 100.0, 0.05), 1.0)
-            audio_filters.append(f"aecho=0.8:0.88:60:{r_val}")
+            audio_filters.append("aecho=0.8:0.88:60:0.45")
 
         filter_str = ",".join(audio_filters) if audio_filters else "anull"
 
-        # 7. Oblozka faylini avtomatik topish
+        # 7. Cover faylini izlash
         cover_path = None
-        for possible_name in ["cover.jpg", "cover.jpg.jpg", "cover.png", "cover.jpeg"]:
+        for possible_name in ["cover.jpg", "cover.png", "cover.jpeg"]:
             if os.path.exists(possible_name):
                 cover_path = possible_name
                 break
 
-        # 8. FFmpeg buyrug'ini tayyorlash
+        # 8. FFmpeg buyrug'i
         ffmpeg_cmd = ["ffmpeg", "-y", "-i", input_path]
 
         if cover_path:
@@ -101,7 +103,6 @@ async def process_audio(
 
         ffmpeg_cmd.extend(["-af", filter_str])
 
-        # Oblozkani AIMP va Telegram pleyerlariga to'g'ri o'tkazish
         if cover_path:
             ffmpeg_cmd.extend([
                 "-map", "0:a",
@@ -113,16 +114,14 @@ async def process_audio(
 
         ffmpeg_cmd.extend([
             "-b:a", bitrate,
-            "-metadata", f"title={custom_title}",
-            "-metadata", "artist=BStrack",
+            "-metadata", f"title={final_title}",
             output_path
         ])
 
-        # 9. FFmpeg ni bajarish
         process = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if process.returncode != 0:
-            err_msg = process.stderr[-300:] if process.stderr else "FFmpeg bajarishda xatolik"
+            err_msg = process.stderr[-300:] if process.stderr else "FFmpeg xatoligi"
             raise Exception(f"FFmpeg Error: {err_msg}")
 
         if os.path.exists(input_path):
