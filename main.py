@@ -28,7 +28,7 @@ def read_root():
 async def process_audio(
     file: UploadFile = File(...),
     speed: float = Form(1.0),
-    reverb: float = Form(45.0), # Keng zal uchun mos daraja
+    reverb: float = Form(30.0), # Interfeys va Bot uchun bir xil mo'tadil reverb
     bass: float = Form(0.0),
     is_8d: str = Form("false"),
     vocal_remover: str = Form("false"),
@@ -81,19 +81,17 @@ async def process_audio(
         if is_8d.lower() == "true":
             filter_chains.append("apulsator=hz=0.08,volume=1.2")
 
-        # Filter zanjirini birlashtirish
         base_filter_str = ",".join(filter_chains) if filter_chains else "anull"
 
-        # 6. Keng Zal Reverb (Large Hall Reverb + Parallel Stereo Echo)
+        # 6. Balanslangan Keng Zal Reverb (O'ta kuchayib ketmasligi uchun factor 0.35 ga tushirildi)
         if reverb > 0:
-            rev_factor = min(0.65, 0.30 + (reverb / 100.0) * 0.35)
+            rev_factor = min(0.40, 0.15 + (reverb / 100.0) * 0.25)
             
-            # Complex filtergraph: Asl tiniq ovoz bilan keng zal aks-sadosini amix orqali aralashtirish
             filter_complex = (
                 f"[0:a]{base_filter_str},split[orig][echo_in];"
-                f"[echo_in]aecho=0.8:0.7:80|140:{rev_factor}|{rev_factor*0.75},"
-                f"highpass=f=100,lowpass=f=10000[echo_out];"
-                f"[orig][echo_out]amix=inputs=2:weights=1.0 0.55:dropout_transition=0[aout]"
+                f"[echo_in]aecho=0.8:0.7:70|120:{rev_factor}|{rev_factor*0.7},"
+                f"highpass=f=120,lowpass=f=9000[echo_out];"
+                f"[orig][echo_out]amix=inputs=2:weights=1.0 0.35:dropout_transition=0[aout]"
             )
         else:
             filter_complex = f"[0:a]{base_filter_str}[aout]"
